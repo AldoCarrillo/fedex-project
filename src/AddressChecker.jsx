@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const initialAddress = {
   streetAddress: '',
@@ -129,10 +129,24 @@ function AddressChecker() {
   const [isCityFocused, setIsCityFocused] = useState(false)
   const [activeCityIndex, setActiveCityIndex] = useState(-1)
   const [isReadingPhoto, setIsReadingPhoto] = useState(false)
+  const [isPhotoScanningEnabled, setIsPhotoScanningEnabled] = useState(false)
   const [photoMessage, setPhotoMessage] = useState('')
   const [photoError, setPhotoError] = useState('')
+  const [smartyResult, setSmartyResult] = useState(null)
+  const [smartyError, setSmartyError] = useState('')
+  const [isCheckingSmarty, setIsCheckingSmarty] = useState(false)
+  const [fedexResult, setFedexResult] = useState(null)
+  const [fedexError, setFedexError] = useState('')
+  const [isCheckingFedex, setIsCheckingFedex] = useState(false)
   const photoInputRef = useRef(null)
+  const photoHoldTimerRef = useRef(null)
+  const photoHoldTriggeredRef = useRef(false)
   const ocrGenerationRef = useRef(0)
+  const smartyRequestRef = useRef(0)
+  const fedexRequestRef = useRef(0)
+  useEffect(() => () => {
+    if (photoHoldTimerRef.current) clearTimeout(photoHoldTimerRef.current)
+  }, [])
   const citySuggestions = address.state
     ? (citiesByState[address.state] || [])
       .filter((city) => city.toLowerCase().includes(address.city.trim().toLowerCase()))
@@ -140,20 +154,96 @@ function AddressChecker() {
     : []
   const showCitySuggestions = isCityFocused && address.city.trim().length > 0 && citySuggestions.length > 0
 
+  function startPhotoHold() {
+    if (isPhotoScanningEnabled || isReadingPhoto || photoHoldTimerRef.current) return
+
+    photoHoldTimerRef.current = setTimeout(() => {
+      photoHoldTimerRef.current = null
+      photoHoldTriggeredRef.current = true
+      setIsPhotoScanningEnabled(true)
+      setPhotoMessage('Photo scanning enabled. Tap the camera button to choose a photo.')
+    }, 2000)
+  }
+
+  function stopPhotoHold() {
+    if (photoHoldTimerRef.current) {
+      clearTimeout(photoHoldTimerRef.current)
+      photoHoldTimerRef.current = null
+      return false
+    }
+
+    return photoHoldTriggeredRef.current
+  }
+
+  function handlePhotoButtonClick() {
+    if (photoHoldTriggeredRef.current) {
+      photoHoldTriggeredRef.current = false
+      return
+    }
+
+    if (isReadingPhoto) return
+
+    if (!isPhotoScanningEnabled) {
+      setPhotoMessage('Press and hold for 2 seconds to enable photo scanning.')
+      return
+    }
+
+    photoInputRef.current?.click()
+  }
+
+  function handlePhotoButtonKeyDown(event) {
+    if (!isPhotoScanningEnabled && (event.key === ' ' || event.key === 'Enter')) {
+      event.preventDefault()
+      startPhotoHold()
+    }
+  }
+
+  function handlePhotoButtonKeyUp(event) {
+    if (event.key === ' ' || event.key === 'Enter') {
+      event.preventDefault()
+      if (stopPhotoHold()) {
+        photoHoldTriggeredRef.current = false
+      } else if (!isPhotoScanningEnabled) {
+        setPhotoMessage('Press and hold for 2 seconds to enable photo scanning.')
+      }
+    }
+  }
+
+  function cancelPhotoHold() {
+    stopPhotoHold()
+    photoHoldTriggeredRef.current = false
+  }
+
   function updateAddress(event) {
     const { name, value } = event.target
     ocrGenerationRef.current += 1
+    smartyRequestRef.current += 1
+    fedexRequestRef.current += 1
     const updatedValue = ['streetAddress', 'apartment', 'city'].includes(name)
       ? capitalizeWordInitials(value)
       : value
     setAddress((currentAddress) => ({ ...currentAddress, [name]: updatedValue }))
     setCheckedAddress(null)
+    setSmartyResult(null)
+    setSmartyError('')
+    setIsCheckingSmarty(false)
+    setFedexResult(null)
+    setFedexError('')
+    setIsCheckingFedex(false)
     if (name === 'city') setActiveCityIndex(-1)
   }
 
   function chooseCity(city) {
+    smartyRequestRef.current += 1
+    fedexRequestRef.current += 1
     setAddress((currentAddress) => ({ ...currentAddress, city }))
     setCheckedAddress(null)
+    setSmartyResult(null)
+    setSmartyError('')
+    setIsCheckingSmarty(false)
+    setFedexResult(null)
+    setFedexError('')
+    setIsCheckingFedex(false)
     setActiveCityIndex(-1)
     setIsCityFocused(false)
   }
@@ -195,12 +285,73 @@ function AddressChecker() {
     })
   }
 
+  async function verifyAddressWithProvider({
+    endpoint,
+    provider,
+    requestRef,
+    setResult,
+    setError,
+    setLoading,
+  }) {
+    const requestId = ++requestRef.current
+    setResult(null)
+    setError('')
+    setLoading(true)
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(address),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || `${provider} could not verify this address.`)
+      if (requestId === requestRef.current) setResult(result)
+    } catch (error) {
+      if (requestId === requestRef.current) {
+        setError(error instanceof Error ? error.message : `Could not verify the address with ${provider}. Please try again.`)
+      }
+    } finally {
+      if (requestId === requestRef.current) setLoading(false)
+    }
+  }
+
+  function checkWithSmarty() {
+    return verifyAddressWithProvider({
+      endpoint: '/api/validate-address',
+      provider: 'Smarty',
+      requestRef: smartyRequestRef,
+      setResult: setSmartyResult,
+      setError: setSmartyError,
+      setLoading: setIsCheckingSmarty,
+    })
+  }
+
+  function checkWithFedex() {
+    return verifyAddressWithProvider({
+      endpoint: '/api/validate-address-fedex',
+      provider: 'FedEx',
+      requestRef: fedexRequestRef,
+      setResult: setFedexResult,
+      setError: setFedexError,
+      setLoading: setIsCheckingFedex,
+    })
+  }
+
   function clearAddress() {
     ocrGenerationRef.current += 1
+    smartyRequestRef.current += 1
+    fedexRequestRef.current += 1
     setAddress(initialAddress)
     setCheckedAddress(null)
     setPhotoMessage('')
     setPhotoError('')
+    setSmartyResult(null)
+    setSmartyError('')
+    setIsCheckingSmarty(false)
+    setFedexResult(null)
+    setFedexError('')
+    setIsCheckingFedex(false)
   }
 
   async function readAddressPhoto(event) {
@@ -211,6 +362,14 @@ function AddressChecker() {
     setPhotoMessage('')
     setPhotoError('')
     setCheckedAddress(null)
+    smartyRequestRef.current += 1
+    fedexRequestRef.current += 1
+    setSmartyResult(null)
+    setSmartyError('')
+    setIsCheckingSmarty(false)
+    setFedexResult(null)
+    setFedexError('')
+    setIsCheckingFedex(false)
 
     if (!file.type.startsWith('image/')) {
       setPhotoError('Choose an image file to scan.')
@@ -359,48 +518,65 @@ function AddressChecker() {
 
           <label className="address-field" htmlFor="postal-code">
             ZIP code
-            <div className="zip-input-row">
-              <input
-                autoComplete="postal-code"
-                id="postal-code"
-                inputMode="numeric"
-                name="postalCode"
-                onChange={updateAddress}
-                pattern="\d{5}(?:-\d{4})?"
-                placeholder="38103"
-                required
-                title="Enter a 5-digit ZIP code or ZIP+4."
-                value={address.postalCode}
-              />
-              <button
-                aria-label="Take or choose a photo of an address"
-                className="camera-button"
-                disabled={isReadingPhoto}
-                onClick={() => photoInputRef.current?.click()}
-                title="Scan address from a photo"
-                type="button"
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24">
-                  <path d="M8.2 5.5 9.4 4h5.2l1.2 1.5H19A2 2 0 0 1 21 7.5v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-10a2 2 0 0 1 2-2h3.2Z" />
-                  <circle cx="12" cy="12.5" r="3.5" />
-                </svg>
-              </button>
-              <input
-                accept="image/*"
-                capture="environment"
-                className="photo-input"
-                onChange={readAddressPhoto}
-                ref={photoInputRef}
-                tabIndex={-1}
-                type="file"
-              />
-            </div>
+            <input
+              autoComplete="postal-code"
+              id="postal-code"
+              inputMode="numeric"
+              name="postalCode"
+              onChange={updateAddress}
+              pattern="\d{5}(?:-\d{4})?"
+              placeholder="38103"
+              required
+              title="Enter a 5-digit ZIP code or ZIP+4."
+              value={address.postalCode}
+            />
           </label>
+
+          <div className="photo-field">
+            <button
+              aria-label={isPhotoScanningEnabled ? 'Choose an address photo to scan' : 'Hold for 2 seconds to enable photo scanning'}
+              aria-disabled={isReadingPhoto}
+              aria-pressed={isPhotoScanningEnabled}
+              className="camera-button"
+              onBlur={cancelPhotoHold}
+              onClick={handlePhotoButtonClick}
+              onContextMenu={(event) => event.preventDefault()}
+              onKeyDown={handlePhotoButtonKeyDown}
+              onKeyUp={handlePhotoButtonKeyUp}
+              onPointerCancel={cancelPhotoHold}
+              onPointerDown={(event) => {
+                if (!isPhotoScanningEnabled) event.currentTarget.setPointerCapture(event.pointerId)
+                startPhotoHold()
+              }}
+              onPointerUp={() => {
+                const holdCompleted = stopPhotoHold()
+                if (!isPhotoScanningEnabled && !holdCompleted) {
+                  setPhotoMessage('Press and hold for 2 seconds to enable photo scanning.')
+                }
+              }}
+              title={isPhotoScanningEnabled ? 'Choose an address photo to scan' : 'Press and hold for 2 seconds to enable'}
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M8.2 5.5 9.4 4h5.2l1.2 1.5H19A2 2 0 0 1 21 7.5v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-10a2 2 0 0 1 2-2h3.2Z" />
+                <circle cx="12" cy="12.5" r="3.5" />
+              </svg>
+              <span>{isPhotoScanningEnabled ? 'Tap to scan' : 'Hold 2 sec to enable'}</span>
+            </button>
+            <input
+              accept="image/*"
+              capture="environment"
+              className="photo-input"
+              onChange={readAddressPhoto}
+              ref={photoInputRef}
+              tabIndex={-1}
+              type="file"
+            />
+          </div>
         </div>
 
         <p className="address-privacy">
-          Format checks run in your browser. Photos are processed on this device and aren’t uploaded.
-          The address-existence API check is not connected yet.
+          Format checks run in your browser. The verification buttons send address details to the selected provider.
         </p>
         {isReadingPhoto && <p className="photo-status" role="status">{photoMessage}</p>}
         {!isReadingPhoto && photoMessage && <p className="photo-status" role="status">{photoMessage}</p>}
@@ -414,17 +590,71 @@ function AddressChecker() {
           </button>
           <button
             aria-describedby="existence-check-note"
-            className="address-existence-button"
-            disabled
+            aria-label={isCheckingSmarty ? 'Checking Smarty' : 'Check Smarty'}
+            className="address-existence-button smarty-check-button"
+            disabled={isCheckingSmarty}
+            onClick={checkWithSmarty}
             type="button"
           >
-            Check if address exists
-            <span className="coming-soon-label">Coming soon</span>
+            <span>{isCheckingSmarty ? 'Checking Smarty…' : 'Check Smarty'}</span>
+            <span aria-hidden="true" className="provider-mark smarty-provider-mark">S</span>
+          </button>
+          <button
+            aria-label={isCheckingFedex ? 'Checking FedEx' : 'Check FedEx'}
+            className="address-existence-button fedex-check-button"
+            disabled={isCheckingFedex}
+            onClick={checkWithFedex}
+            type="button"
+          >
+            <span>{isCheckingFedex ? 'Checking…' : 'Check'}</span>
+            <span aria-hidden="true" className="provider-mark fedex-provider-mark">
+              <span>Fed</span><span>Ex</span>
+            </span>
           </button>
         </div>
         <p className="existence-check-note" id="existence-check-note">
-          Address existence verification will be added later using an external API.
+          Smarty checks the address against U.S. postal records. Results do not guarantee delivery.
         </p>
+        {smartyError && <p className="smarty-error" role="alert">{smartyError}</p>}
+        {smartyResult && (
+          <section
+            aria-live="polite"
+            className={`smarty-result ${smartyResult.deliverable ? 'smarty-result--confirmed' : ''}`}
+            role="status"
+          >
+            <strong>
+              {smartyResult.deliverable
+                ? 'Delivery point confirmed'
+                : smartyResult.found
+                  ? 'Address match found; delivery point unconfirmed'
+                  : 'No matching address found'}
+            </strong>
+            <p>{smartyResult.message}</p>
+            {smartyResult.standardizedAddress && <p>{smartyResult.standardizedAddress}</p>}
+          </section>
+        )}
+        {fedexError && <p className="smarty-error" role="alert">{fedexError}</p>}
+        {fedexResult && (
+          <section
+            aria-live="polite"
+            className={`smarty-result ${fedexResult.deliverable ? 'smarty-result--confirmed' : ''}`}
+            role="status"
+          >
+            <strong>
+              {fedexResult.environment === 'sandbox'
+                ? 'FedEx sandbox test response'
+                : fedexResult.candidateConflictsWithInput
+                  ? 'FedEx returned a different address'
+                  : fedexResult.deliverable
+                ? 'FedEx delivery point confirmed'
+                : fedexResult.found
+                  ? 'FedEx address candidate found'
+                  : 'FedEx could not resolve the address'}
+            </strong>
+            <p>{fedexResult.message}</p>
+            {fedexResult.standardizedAddress && <p>{fedexResult.standardizedAddress}</p>}
+          </section>
+        )}
       </form>
 
       {checkedAddress && (
