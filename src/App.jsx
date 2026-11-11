@@ -1,10 +1,11 @@
 import './App.css'
+import AddressChecker from './AddressChecker.jsx'
 
 const tools = [
-  { id: 'tool-1', title: 'Tool 01', image: '/tools/tool-1.svg' },
-  { id: 'tool-2', title: 'Tool 02', image: '/tools/tool-2.svg' },
-  { id: 'tool-3', title: 'Tool 03', image: '/tools/tool-3.svg' },
-  { id: 'tool-4', title: 'Tool 04', image: '/tools/tool-4.svg' },
+  { id: 'tool-1', title: 'Tool 01', image: '/tools/tool-1.svg', description: 'Your tool goes here' },
+  { id: 'tool-2', title: 'Tool 02', image: '/tools/tool-2.svg', description: 'Your tool goes here' },
+  { id: 'tool-3', title: 'Address Checker', image: '/tools/tool-3.svg', description: 'Validate a U.S. mailing address' },
+  { id: 'tool-4', title: 'Tool 04', image: '/tools/tool-4.svg', description: 'Your tool goes here' },
 ]
 
 function Header() {
@@ -28,11 +29,17 @@ function App() {
       {selectedTool ? (
         <main className="tool-page">
           <a className="back-link" href="/">← All tools</a>
-          <img className="tool-page-image" src={selectedTool.image} alt="" />
-          <p className="eyebrow">YOUR NEXT PROJECT</p>
-          <h1>{selectedTool.title}</h1>
-          <p className="description">This page is ready for your tool.</p>
-          <span className="coming-soon">Coming soon</span>
+          {selectedTool.id === 'tool-3' ? (
+            <AddressChecker />
+          ) : (
+            <>
+              <img className="tool-page-image" src={selectedTool.image} alt="" />
+              <p className="eyebrow">YOUR NEXT PROJECT</p>
+              <h1>{selectedTool.title}</h1>
+              <p className="description">This page is ready for your tool.</p>
+              <span className="coming-soon">Coming soon</span>
+            </>
+          )}
         </main>
       ) : (
         <main className="home">
@@ -48,7 +55,7 @@ function App() {
                 <div className="tool-card-copy">
                   <span className="tool-number">TOOL 0{index + 1}</span>
                   <h2>{tool.title}</h2>
-                  <p>Your tool goes here</p>
+                  <p>{tool.description}</p>
                 </div>
                 <span className="card-arrow" aria-hidden="true">↗</span>
               </a>
@@ -56,7 +63,7 @@ function App() {
           </section>
         </main>
       )}
-      <footer className="footer">© 2026 FedEx. Tools coming soon.</footer>
+      <footer className="footer">© 2026 FedEx. Tools for your workflow.</footer>
     </div>
   )
 }
