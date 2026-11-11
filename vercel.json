@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/tools/:toolId",
+      "destination": "/index.html"
+    }
+  ]
+}
