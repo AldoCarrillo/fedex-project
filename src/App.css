@@ -285,6 +285,79 @@
   line-height: 1.5;
 }
 
+.spreadsheet-auth-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.spreadsheet-auth-field {
+  display: grid;
+  gap: 7px;
+  color: #352c3d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.spreadsheet-auth-field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid #aaa2b2;
+  border-radius: 4px;
+  color: #29222f;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.spreadsheet-auth-field input:focus {
+  border-color: #4d148c;
+  outline: 2px solid #4d148c;
+  outline-offset: 1px;
+}
+
+.spreadsheet-auth-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.spreadsheet-auth-actions .spreadsheet-filter-button {
+  min-width: 140px;
+}
+
+.spreadsheet-auth-mode {
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4d148c;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.spreadsheet-auth-mode:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.spreadsheet-account-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.spreadsheet-account-row .spreadsheet-status {
+  margin: 0;
+}
+
 .spreadsheet-upload {
   min-height: 88px;
   position: relative;
@@ -377,19 +450,31 @@
   white-space: nowrap;
 }
 
-.spreadsheet-filter-button {
+.spreadsheet-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.spreadsheet-filter-button,
+.spreadsheet-download-button,
+.spreadsheet-clear-button {
   min-width: 124px;
   min-height: 44px;
-  margin-bottom: 20px;
   padding: 0 18px;
-  border: 0;
   border-radius: 4px;
-  background: #4d148c;
-  color: #fff;
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
   transition: background 160ms ease;
+}
+
+.spreadsheet-filter-button {
+  border: 0;
+  background: #4d148c;
+  color: #fff;
 }
 
 .spreadsheet-filter-button:hover:not(:disabled) {
@@ -401,9 +486,110 @@
   opacity: .5;
 }
 
+.spreadsheet-download-button {
+  border: 1px solid #4d148c;
+  background: #fff;
+  color: #4d148c;
+}
+
+.spreadsheet-clear-button {
+  border: 1px solid #8a8490;
+  background: #fff;
+  color: #514b57;
+}
+
+.spreadsheet-download-button:hover,
+.spreadsheet-clear-button:hover {
+  background: #f3ecfa;
+}
+
 .spreadsheet-groups {
   display: grid;
   gap: 16px;
+}
+
+.spreadsheet-history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.spreadsheet-history-entry {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #e5dfeb;
+  border-radius: 6px;
+  background: #fcfbfd;
+}
+
+.spreadsheet-history-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.spreadsheet-history-toggle {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4d148c;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+}
+
+.spreadsheet-history-toggle[aria-pressed='true'] {
+  color: #371064;
+}
+
+.spreadsheet-history-toggle:hover {
+  color: #371064;
+}
+
+.spreadsheet-history-toggle > span:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.spreadsheet-history-toggle > span:last-child {
+  flex: 0 0 auto;
+  color: #716a77;
+  font-size: 11px;
+}
+
+.spreadsheet-history-delete {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #a4261e;
+  border-radius: 4px;
+  background: #fff;
+  color: #a4261e;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.spreadsheet-history-delete:hover:not(:disabled) {
+  background: #fff2f1;
+}
+
+.spreadsheet-history-delete:disabled {
+  cursor: wait;
+  opacity: .6;
+}
+
+.spreadsheet-history-file {
+  overflow: hidden;
+  color: #716a77;
+  font-size: 11px;
+  text-overflow: ellipsis;
 }
 
 .spreadsheet-group {
@@ -971,6 +1157,14 @@
 
   .spreadsheet-panel {
     padding: 18px;
+  }
+
+  .spreadsheet-auth-form {
+    grid-template-columns: 1fr;
+  }
+
+  .spreadsheet-auth-actions {
+    grid-column: auto;
   }
 
   .section-heading h2 {
