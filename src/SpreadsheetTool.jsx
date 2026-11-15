@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { readSheet } from 'read-excel-file/browser'
-import { isSupabaseConfigured, supabase } from './supabase.js'
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024
 const MAX_ROWS = 50000
@@ -8,8 +7,66 @@ const DISPLAY_COLUMNS = 3
 const PREVIEW_ROWS_PER_GROUP = 100
 const GROUP_STARTS = [100, 200, 300, 400, 500, 600, 700, 800]
 const MAX_IMAGE_DIMENSION = 32767
-function getSupabaseError(error, fallback) {
-  return error instanceof Error ? error.message : fallback
+const HISTORY_CODE_STORAGE_KEY = 'fedex-tools-history-code'
+const HISTORY_CODE_PATTERN = /^[A-Za-z0-9_-]{40,64}$/
+
+function createHistoryCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+}
+
+function getInitialHistorySetup() {
+  let storedCode
+  try {
+    storedCode = localStorage.getItem(HISTORY_CODE_STORAGE_KEY)
+  } catch {
+    return {
+      code: createHistoryCode(),
+      error: 'Browser storage is unavailable. Copy your history code before leaving this page.',
+    }
+  }
+  if (HISTORY_CODE_PATTERN.test(storedCode || '')) return { code: storedCode, error: '' }
+
+  const code = createHistoryCode()
+  try {
+    localStorage.setItem(HISTORY_CODE_STORAGE_KEY, code)
+    return { code, error: '' }
+  } catch {
+    return {
+      code,
+      error: 'Could not save your history code in this browser. Copy it before leaving this page.',
+    }
+  }
+}
+
+function mapPostedResult(post) {
+  return {
+    id: post.id,
+    savedAt: post.saved_at,
+    fileName: post.file_name,
+    headers: post.headers,
+    idColumnIndex: post.id_column_index,
+    groups: post.groups,
+    totalPackages: post.total_packages,
+  }
+}
+
+async function requestPostedResults(code, { method = 'GET', id, body } = {}) {
+  const query = id ? `?id=${encodeURIComponent(id)}` : ''
+  const response = await fetch(`/api/package-posts${query}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${code}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  const result = await response.json()
+  if (!response.ok) {
+    throw new Error(result.error || 'Cloud history request failed. Please try again.')
+  }
+  return result
 }
 
 function cellToText(value) {
@@ -324,13 +381,12 @@ function PostedResultEntry({ post, onSelect, onDelete, isDeleting, isSelected })
 
 function SpreadsheetTool() {
   const fileInputRef = useRef(null)
-  const [user, setUser] = useState(null)
-  const [authLoading, setAuthLoading] = useState(Boolean(supabase))
-  const [authMode, setAuthMode] = useState('sign-in')
-  const [authEmail, setAuthEmail] = useState('')
-  const [authPassword, setAuthPassword] = useState('')
-  const [authError, setAuthError] = useState('')
-  const [authMessage, setAuthMessage] = useState('')
+  const [initialHistorySetup] = useState(getInitialHistorySetup)
+  const [historyCode, setHistoryCode] = useState(initialHistorySetup.code)
+  const [historyCodeDraft, setHistoryCodeDraft] = useState(initialHistorySetup.code)
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyCodeError, setHistoryCodeError] = useState(initialHistorySetup.error)
+  const [historyCodeMessage, setHistoryCodeMessage] = useState('')
   const [file, setFile] = useState(null)
   const [headers, setHeaders] = useState([])
   const [records, setRecords] = useState([])
@@ -352,111 +408,57 @@ function SpreadsheetTool() {
   const requestId = useRef(0)
 
   useEffect(() => {
-    if (!supabase) return undefined
+    if (!historyCode) return undefined
 
     let isCurrent = true
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!isCurrent) return
-      const nextUser = session?.user || null
-      setUser(nextUser)
-      setHistoryError('')
-      if (!nextUser) {
-        setPostedResults([])
-        setActivePostedResult(null)
-      }
-    })
-
-    supabase.auth.getSession()
-      .then(({ data, error: sessionError }) => {
+    requestPostedResults(historyCode)
+      .then((data) => {
         if (!isCurrent) return
-        if (sessionError) setAuthError(sessionError.message)
-        setUser(data.session?.user || null)
-        setHistoryError('')
-        setAuthLoading(false)
-      })
-      .catch((sessionError) => {
-        if (isCurrent) {
-          setAuthError(getSupabaseError(sessionError, 'Could not check your sign-in status.'))
-          setAuthLoading(false)
-        }
-      })
-
-    return () => {
-      isCurrent = false
-      subscription.unsubscribe()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (authLoading) return
-    if (!user || !supabase) return undefined
-
-    let isCurrent = true
-    supabase
-      .from('package_posts')
-      .select('id, saved_at, file_name, headers, id_column_index, groups, total_packages')
-      .order('saved_at', { ascending: false })
-      .then(({ data, error: loadError }) => {
-        if (!isCurrent) return
-        if (loadError) throw loadError
-        setPostedResults(data.map((row) => ({
-          id: row.id,
-          savedAt: row.saved_at,
-          fileName: row.file_name,
-          headers: row.headers,
-          idColumnIndex: row.id_column_index,
-          groups: row.groups,
-          totalPackages: row.total_packages,
-        })))
+        setPostedResults(data.map(mapPostedResult))
       })
       .catch((loadError) => {
-        if (isCurrent) setHistoryError(
-          `Could not load posted results: ${getSupabaseError(loadError, 'Please try again.')}`,
-        )
+        if (isCurrent) setHistoryError(`Could not load posted results: ${loadError.message}`)
+      })
+      .finally(() => {
+        if (isCurrent) setHistoryLoading(false)
       })
 
     return () => {
       isCurrent = false
     }
-  }, [authLoading, user])
+  }, [historyCode])
 
-  async function handleAuthSubmit(event) {
+  function handleApplyHistoryCode(event) {
     event.preventDefault()
-    if (!supabase) return
-
-    setAuthError('')
-    setAuthMessage('')
+    setHistoryCodeError('')
+    setHistoryCodeMessage('')
+    if (!HISTORY_CODE_PATTERN.test(historyCodeDraft)) {
+      setHistoryCodeError('Enter the complete history access code from the other device.')
+      return
+    }
     try {
-      const result = authMode === 'sign-in'
-        ? await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword })
-        : await supabase.auth.signUp({ email: authEmail, password: authPassword })
-
-      if (result.error) {
-        setAuthError(result.error.message)
-      } else if (authMode === 'sign-up' && !result.data.session) {
-        setAuthMessage('Check your email to confirm your account, then sign in.')
-      } else {
-        setAuthPassword('')
-        setAuthMessage(authMode === 'sign-up' ? 'Account created and signed in.' : 'Signed in.')
+      localStorage.setItem(HISTORY_CODE_STORAGE_KEY, historyCodeDraft)
+      if (historyCodeDraft !== historyCode) {
+        setHistoryLoading(true)
+        setPostedResults([])
+        setActivePostedResult(null)
+        setHistoryError('')
       }
-    } catch (authRequestError) {
-      setAuthError(getSupabaseError(authRequestError, 'Could not contact the sign-in service.'))
+      setHistoryCode(historyCodeDraft)
+      setHistoryCodeMessage('This device is now using that private history code.')
+    } catch {
+      setHistoryCodeError('Could not save the history code in this browser. Enable local storage and try again.')
     }
   }
 
-  async function handleSignOut() {
-    if (!supabase) return
-    setAuthError('')
+  async function copyHistoryCode() {
+    setHistoryCodeError('')
+    setHistoryCodeMessage('')
     try {
-      const { error: signOutError } = await supabase.auth.signOut()
-      if (signOutError) {
-        setAuthError(signOutError.message)
-        return
-      }
-      clearCurrentData()
-      setAuthMessage('Signed out.')
-    } catch (signOutError) {
-      setAuthError(getSupabaseError(signOutError, 'Could not sign out.'))
+      await navigator.clipboard.writeText(historyCode)
+      setHistoryCodeMessage('History code copied. Keep it private and use it on your other devices.')
+    } catch {
+      setHistoryCodeError('Could not copy the history code. Select and copy it manually.')
     }
   }
 
@@ -623,13 +625,12 @@ function SpreadsheetTool() {
   }
 
   async function postResults() {
-    if (!filteredGroups || !user || !supabase || isPosting) return
+    if (!filteredGroups || !historyCode || isPosting) return
 
     setIsPosting(true)
     setPostMessage('')
     setPostError('')
     const post = {
-      user_id: user.id,
       file_name: file?.name || activePostedResult?.fileName || 'Uploaded workbook',
       headers,
       id_column_index: idColumnIndex,
@@ -643,49 +644,29 @@ function SpreadsheetTool() {
     }
 
     try {
-      const { data, error: saveError } = await supabase
-        .from('package_posts')
-        .insert(post)
-        .select('id, saved_at, file_name, headers, id_column_index, groups, total_packages')
-        .single()
-      if (saveError) throw saveError
-      const savedPost = {
-        id: data.id,
-        savedAt: data.saved_at,
-        fileName: data.file_name,
-        headers: data.headers,
-        idColumnIndex: data.id_column_index,
-        groups: data.groups,
-        totalPackages: data.total_packages,
-      }
+      const data = await requestPostedResults(historyCode, { method: 'POST', body: post })
+      const savedPost = mapPostedResult(data)
       setPostedResults((current) => [savedPost, ...current])
       setHistoryError('')
       setPostMessage('Results saved to your cloud history.')
     } catch (saveError) {
-      setPostError(`Could not save results: ${getSupabaseError(saveError, 'Please try again.')}`)
+      setPostError(`Could not save results: ${saveError.message}`)
     } finally {
       setIsPosting(false)
     }
   }
 
   async function deleteResult(postId) {
-    if (!supabase || isDeletingPost) return
+    if (!historyCode || isDeletingPost) return
 
     setIsDeletingPost(true)
     setHistoryError('')
     try {
-      const { data, error: deleteError } = await supabase
-        .from('package_posts')
-        .delete()
-        .eq('id', postId)
-        .select('id')
-        .single()
-      if (deleteError) throw deleteError
-      if (!data) throw new Error('The saved result was not found.')
+      await requestPostedResults(historyCode, { method: 'DELETE', id: postId })
       setPostedResults((current) => current.filter((post) => post.id !== postId))
       if (activePostedResult?.id === postId) setActivePostedResult(null)
     } catch (deleteError) {
-      setHistoryError(`Could not delete posted results: ${getSupabaseError(deleteError, 'Please try again.')}`)
+      setHistoryError(`Could not delete posted results: ${deleteError.message}`)
     } finally {
       setIsDeletingPost(false)
     }
@@ -721,74 +702,46 @@ function SpreadsheetTool() {
         Upload your file, then filter packages by ID.
       </p>
 
-      <section aria-labelledby="spreadsheet-account-title" className="spreadsheet-panel">
+      <section aria-labelledby="spreadsheet-history-code-title" className="spreadsheet-panel">
         <div className="spreadsheet-panel-heading">
           <span className="spreadsheet-step">☁</span>
           <div>
-            <h2 id="spreadsheet-account-title">Cloud history</h2>
-            <p>Sign in to save and access posted results from any device.</p>
+            <h2 id="spreadsheet-history-code-title">Private cloud history</h2>
+            <p>No account or sign-in required. Your history code connects your devices.</p>
           </div>
         </div>
-        {!isSupabaseConfigured ? (
-          <p className="spreadsheet-error" role="alert">
-            Cloud history is not configured yet. Add the Supabase project URL and publishable key, then apply the database migration.
-          </p>
-        ) : authLoading ? (
-          <p className="spreadsheet-status" role="status">Checking your sign-in…</p>
-        ) : user ? (
-          <div className="spreadsheet-account-row">
-            <p className="spreadsheet-status">Signed in as {user.email}</p>
+        <form className="spreadsheet-auth-form" onSubmit={handleApplyHistoryCode}>
+          <label className="spreadsheet-auth-field">
+            History access code
+            <input
+              autoComplete="off"
+              onChange={(event) => setHistoryCodeDraft(event.target.value.trim())}
+              required
+              spellCheck="false"
+              type="text"
+              value={historyCodeDraft}
+            />
+          </label>
+          <div className="spreadsheet-auth-actions">
+            <button className="spreadsheet-filter-button" disabled={!historyCode} type="submit">
+              Use code
+            </button>
             <button
-              className="spreadsheet-clear-button"
-              onClick={handleSignOut}
+              className="spreadsheet-auth-mode"
+              disabled={!historyCode}
+              onClick={copyHistoryCode}
               type="button"
             >
-              Sign out
+              Copy current code
             </button>
           </div>
-        ) : (
-          <form className="spreadsheet-auth-form" onSubmit={handleAuthSubmit}>
-            <label className="spreadsheet-auth-field">
-              Email
-              <input
-                autoComplete="email"
-                onChange={(event) => setAuthEmail(event.target.value)}
-                required
-                type="email"
-                value={authEmail}
-              />
-            </label>
-            <label className="spreadsheet-auth-field">
-              Password
-              <input
-                autoComplete={authMode === 'sign-in' ? 'current-password' : 'new-password'}
-                minLength={6}
-                onChange={(event) => setAuthPassword(event.target.value)}
-                required
-                type="password"
-                value={authPassword}
-              />
-            </label>
-            <div className="spreadsheet-auth-actions">
-              <button className="spreadsheet-filter-button" type="submit">
-                {authMode === 'sign-in' ? 'Sign in' : 'Create account'}
-              </button>
-              <button
-                className="spreadsheet-auth-mode"
-                onClick={() => {
-                  setAuthMode((mode) => mode === 'sign-in' ? 'sign-up' : 'sign-in')
-                  setAuthError('')
-                  setAuthMessage('')
-                }}
-                type="button"
-              >
-                {authMode === 'sign-in' ? 'Create an account' : 'Already registered? Sign in'}
-              </button>
-            </div>
-          </form>
-        )}
-        {authMessage && <p className="spreadsheet-status" role="status">{authMessage}</p>}
-        {authError && <p className="spreadsheet-error" role="alert">{authError}</p>}
+        </form>
+        <p className="spreadsheet-status">
+          Keep this code private. Anyone who has it can view and delete your saved results. Use the same code on each device.
+        </p>
+        {historyLoading && <p className="spreadsheet-status" role="status">Loading cloud history…</p>}
+        {historyCodeMessage && <p className="spreadsheet-status" role="status">{historyCodeMessage}</p>}
+        {historyCodeError && <p className="spreadsheet-error" role="alert">{historyCodeError}</p>}
       </section>
 
       <section aria-labelledby="spreadsheet-upload-title" className="spreadsheet-panel">
@@ -796,7 +749,7 @@ function SpreadsheetTool() {
           <span className="spreadsheet-step">01</span>
           <div>
             <h2 id="spreadsheet-upload-title">Upload Excel file</h2>
-            <p>Use a three-column .xlsx file. Posting saves results to your account.</p>
+            <p>Use a three-column .xlsx file. Posted results are saved to your private cloud history.</p>
           </div>
         </div>
         <label className="spreadsheet-upload">
@@ -861,7 +814,7 @@ function SpreadsheetTool() {
           {filteredGroups && (
             <button
               className="spreadsheet-download-button"
-              disabled={!user || isPosting}
+              disabled={!historyCode || isPosting}
               onClick={postResults}
               type="button"
             >
@@ -915,17 +868,13 @@ function SpreadsheetTool() {
           <span className="spreadsheet-step">03</span>
           <div>
             <h2 id="spreadsheet-history-title">Posted results history</h2>
-            <p>Saved to your account and available across devices.</p>
+            <p>Saved results are available on devices using the same history code.</p>
           </div>
         </div>
         {historyError && <p className="spreadsheet-error" role="alert">{historyError}</p>}
-        {!historyError && postedResults.length === 0 ? (
+        {!historyError && !historyLoading && postedResults.length === 0 ? (
           <p className="spreadsheet-empty">
-            {!isSupabaseConfigured
-              ? 'Configure cloud history to save results across devices.'
-              : !user
-                ? 'Sign in to view your posted results.'
-                : 'No posted results yet.'}
+            No posted results yet.
           </p>
         ) : (
           postedResults.length > 0 && (
