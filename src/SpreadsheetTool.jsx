@@ -8,12 +8,67 @@ const PREVIEW_ROWS_PER_GROUP = 100
 const GROUP_STARTS = [100, 200, 300, 400, 500, 600, 700, 800]
 const MAX_IMAGE_DIMENSION = 32767
 const HISTORY_CODE_STORAGE_KEY = 'fedex-tools-history-code'
+const HISTORY_PAIRING_PENDING_KEY = 'fedex-tools-history-pairing-pending'
+const HISTORY_PAIRING_PIN_KEY = 'fedex-tools-history-pairing-pin'
 const HISTORY_CODE_PATTERN = /^[A-Za-z0-9_-]{40,64}$/
+const PIN_PATTERN = /^\d{4}$/
 
 function createHistoryCode() {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+}
+
+function createFourDigitCode() {
+  return String(crypto.getRandomValues(new Uint32Array(1))[0] % 9000 + 1000)
+}
+
+async function hashHistoryCode(code) {
+  const bytes = new TextEncoder().encode(code)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function requestHistoryPairing({ action, code, body, requestToken }) {
+  const query = new URLSearchParams({ action })
+  const response = await fetch(`/api/history-pairing?${query}`, {
+    method: body ? 'POST' : 'GET',
+    headers: {
+      ...(code || requestToken ? { Authorization: `Bearer ${code || requestToken}` } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  const result = await response.json()
+  if (!response.ok) {
+    throw new Error(result.error || 'Device pairing failed. Please try again.')
+  }
+  return result
+}
+
+function getInitialPairingPin() {
+  try {
+    const storedPin = JSON.parse(localStorage.getItem(HISTORY_PAIRING_PIN_KEY) || 'null')
+    return storedPin && PIN_PATTERN.test(storedPin.pin)
+      && new Date(storedPin.expiresAt) > new Date()
+      ? storedPin
+      : null
+  } catch {
+    return null
+  }
+}
+
+function getInitialPendingPairing() {
+  try {
+    const pending = JSON.parse(localStorage.getItem(HISTORY_PAIRING_PENDING_KEY) || 'null')
+    return pending && HISTORY_CODE_PATTERN.test(pending.code)
+      && /^[A-Za-z0-9_-]{40,64}$/.test(pending.requestToken)
+      && PIN_PATTERN.test(pending.verificationCode)
+      ? pending
+      : null
+  } catch {
+    return null
+  }
 }
 
 function getInitialHistorySetup() {
@@ -384,6 +439,15 @@ function SpreadsheetTool() {
   const [initialHistorySetup] = useState(getInitialHistorySetup)
   const [historyCode, setHistoryCode] = useState(initialHistorySetup.code)
   const [historyCodeDraft, setHistoryCodeDraft] = useState(initialHistorySetup.code)
+  const [pairingPin, setPairingPin] = useState(getInitialPairingPin)
+  const [pairingRequests, setPairingRequests] = useState([])
+  const [pendingPairing, setPendingPairing] = useState(getInitialPendingPairing)
+  const [joinPin, setJoinPin] = useState('')
+  const [pairingError, setPairingError] = useState('')
+  const [pairingMessage, setPairingMessage] = useState('')
+  const [isStartingPairing, setIsStartingPairing] = useState(false)
+  const [isJoiningPairing, setIsJoiningPairing] = useState(false)
+  const [activePairingRequest, setActivePairingRequest] = useState('')
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyCodeError, setHistoryCodeError] = useState(initialHistorySetup.error)
   const [historyCodeMessage, setHistoryCodeMessage] = useState('')
@@ -427,6 +491,182 @@ function SpreadsheetTool() {
       isCurrent = false
     }
   }, [historyCode])
+
+  useEffect(() => {
+    if (!pairingPin || !historyCode) return undefined
+
+    let isCurrent = true
+    let timeoutId
+    const loadRequests = async () => {
+      try {
+        const requests = await requestHistoryPairing({
+          action: 'requests',
+          code: historyCode,
+          body: { action: 'requests', pin: pairingPin.pin },
+        })
+        if (isCurrent) setPairingRequests(requests)
+      } catch (requestError) {
+        if (isCurrent) setPairingError(requestError.message)
+      }
+      if (isCurrent && new Date(pairingPin.expiresAt) > new Date()) {
+        timeoutId = window.setTimeout(loadRequests, 2000)
+      } else if (isCurrent) {
+        localStorage.removeItem(HISTORY_PAIRING_PIN_KEY)
+        setPairingPin(null)
+        setPairingRequests([])
+      }
+    }
+
+    loadRequests()
+    return () => {
+      isCurrent = false
+      window.clearTimeout(timeoutId)
+    }
+  }, [historyCode, pairingPin])
+
+  useEffect(() => {
+    if (!pendingPairing) return undefined
+
+    let isCurrent = true
+    let timeoutId
+    const checkPairing = async () => {
+      try {
+        const { status } = await requestHistoryPairing({
+          action: 'status',
+          requestToken: pendingPairing.requestToken,
+        })
+        if (!isCurrent) return
+        if (status === 'approved') {
+          let storageError = false
+          try {
+            localStorage.setItem(HISTORY_CODE_STORAGE_KEY, pendingPairing.code)
+            localStorage.removeItem(HISTORY_PAIRING_PENDING_KEY)
+          } catch {
+            storageError = true
+          }
+          setHistoryCode(pendingPairing.code)
+          setHistoryCodeDraft(pendingPairing.code)
+          setHistoryLoading(true)
+          setPostedResults([])
+          setActivePostedResult(null)
+          setHistoryError('')
+          setPendingPairing(null)
+          setPairingMessage(storageError
+            ? 'Device paired. Copy the history code shown above now; this browser could not save it for next time.'
+            : 'Device paired. Your private cloud history is now available here.')
+          if (storageError) setPairingError('Browser storage is unavailable. Use “Copy current code” to keep this device connected.')
+          return
+        }
+        if (status === 'rejected' || status === 'expired') {
+          try {
+            localStorage.removeItem(HISTORY_PAIRING_PENDING_KEY)
+          } catch {
+            setPairingError('Could not clear the expired pairing request from browser storage.')
+          }
+          setPendingPairing(null)
+          setPairingError(
+            status === 'rejected'
+              ? 'The other device declined this pairing request.'
+              : 'This pairing PIN expired. Ask the other device to create a new one.',
+          )
+          return
+        }
+      } catch (requestError) {
+        if (isCurrent) setPairingError(requestError.message)
+      }
+      if (isCurrent) timeoutId = window.setTimeout(checkPairing, 2000)
+    }
+
+    checkPairing()
+    return () => {
+      isCurrent = false
+      window.clearTimeout(timeoutId)
+    }
+  }, [pendingPairing])
+
+  async function handleStartPairing() {
+    setPairingError('')
+    setPairingMessage('')
+    setIsStartingPairing(true)
+    try {
+      const result = await requestHistoryPairing({ action: 'start', code: historyCode, body: { action: 'start' } })
+      const nextPin = { pin: result.pin, expiresAt: result.expires_at }
+      setPairingRequests([])
+      setPairingPin(nextPin)
+      try {
+        localStorage.setItem(HISTORY_PAIRING_PIN_KEY, JSON.stringify(nextPin))
+      } catch {
+        setPairingError('PIN created, but browser storage is unavailable. Keep this page open until pairing is complete.')
+      }
+      setPairingMessage('PIN created. It expires in five minutes and requires your approval on this device.')
+    } catch (requestError) {
+      setPairingError(requestError.message)
+    } finally {
+      setIsStartingPairing(false)
+    }
+  }
+
+  async function handleJoinPairing(event) {
+    event.preventDefault()
+    setPairingError('')
+    setPairingMessage('')
+    if (!PIN_PATTERN.test(joinPin)) {
+      setPairingError('Enter the four-digit PIN shown on the device with your history.')
+      return
+    }
+
+    setIsJoiningPairing(true)
+    try {
+      const code = createHistoryCode()
+      const verificationCode = createFourDigitCode()
+      const keyHash = await hashHistoryCode(code)
+      const result = await requestHistoryPairing({
+        action: 'request',
+        body: {
+          action: 'request',
+          pin: joinPin,
+          new_key_hash: keyHash,
+          verification_code: verificationCode,
+        },
+      })
+      const pending = { code, requestToken: result.request_token, verificationCode }
+      setPendingPairing(pending)
+      try {
+        localStorage.setItem(HISTORY_PAIRING_PENDING_KEY, JSON.stringify(pending))
+      } catch {
+        setPairingError('Pairing request sent, but browser storage is unavailable. Keep this page open until it is approved.')
+      }
+      setPairingMessage('Compare the confirmation number on both devices, then approve this request on the original device.')
+    } catch (requestError) {
+      setPairingError(requestError.message)
+    } finally {
+      setIsJoiningPairing(false)
+    }
+  }
+
+  async function handlePairingDecision(pairingRequest, action) {
+    setPairingError('')
+    setActivePairingRequest(pairingRequest.id)
+    try {
+      await requestHistoryPairing({
+        action,
+        code: historyCode,
+        body: {
+          action,
+          pin: pairingPin.pin,
+          request_id: pairingRequest.id,
+        },
+      })
+      setPairingRequests((requests) => requests.filter((request) => request.id !== pairingRequest.id))
+      if (action === 'approve') {
+        setPairingMessage('Device approved. It can now access this history.')
+      }
+    } catch (requestError) {
+      setPairingError(requestError.message)
+    } finally {
+      setActivePairingRequest('')
+    }
+  }
 
   function handleApplyHistoryCode(event) {
     event.preventDefault()
@@ -739,9 +979,84 @@ function SpreadsheetTool() {
         <p className="spreadsheet-status">
           Keep this code private. Anyone who has it can view and delete your saved results. Use the same code on each device.
         </p>
+        <div className="spreadsheet-pairing">
+          <div className="spreadsheet-pairing-heading">
+            <h3>Pair another device with a 4-digit PIN</h3>
+            <p>The PIN expires after five minutes. Approve the request here after checking the matching confirmation number on both devices.</p>
+          </div>
+          <button
+            className="spreadsheet-filter-button"
+            disabled={!historyCode || isStartingPairing || Boolean(pendingPairing)}
+            onClick={handleStartPairing}
+            type="button"
+          >
+            {isStartingPairing ? 'Creating PIN…' : pairingPin ? 'Create a new PIN' : 'Create pairing PIN'}
+          </button>
+          {pairingPin && (
+            <div className="spreadsheet-pairing-pin" role="status">
+              <strong>{pairingPin.pin}</strong>
+              <span>Expires {new Date(pairingPin.expiresAt).toLocaleTimeString()}</span>
+            </div>
+          )}
+          {pairingRequests.map((pairingRequest) => (
+            <div className="spreadsheet-pairing-request" key={pairingRequest.id}>
+              <p>
+                Pairing request · confirmation number <strong>{pairingRequest.verification_code}</strong>
+              </p>
+              <div className="spreadsheet-auth-actions">
+                <button
+                  className="spreadsheet-filter-button"
+                  disabled={Boolean(activePairingRequest)}
+                  onClick={() => handlePairingDecision(pairingRequest, 'approve')}
+                  type="button"
+                >
+                  {activePairingRequest === pairingRequest.id ? 'Saving…' : 'Approve device'}
+                </button>
+                <button
+                  className="spreadsheet-clear-button"
+                  disabled={Boolean(activePairingRequest)}
+                  onClick={() => handlePairingDecision(pairingRequest, 'reject')}
+                  type="button"
+                >
+                  Decline
+                </button>
+              </div>
+            </div>
+          ))}
+          <form className="spreadsheet-pairing-join" onSubmit={handleJoinPairing}>
+            <label className="spreadsheet-auth-field">
+              Pair this device with a PIN
+              <input
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                maxLength={4}
+                onChange={(event) => setJoinPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                pattern="[0-9]{4}"
+                placeholder="4-digit PIN"
+                required
+                type="text"
+                value={joinPin}
+              />
+            </label>
+            <button
+              className="spreadsheet-download-button"
+              disabled={isJoiningPairing || Boolean(pendingPairing)}
+              type="submit"
+            >
+              {isJoiningPairing ? 'Requesting…' : 'Request pairing'}
+            </button>
+          </form>
+          {pendingPairing && (
+            <p className="spreadsheet-status" role="status">
+              Waiting for approval. Confirm number <strong>{pendingPairing.verificationCode}</strong> matches the request shown on the original device.
+            </p>
+          )}
+        </div>
         {historyLoading && <p className="spreadsheet-status" role="status">Loading cloud history…</p>}
         {historyCodeMessage && <p className="spreadsheet-status" role="status">{historyCodeMessage}</p>}
         {historyCodeError && <p className="spreadsheet-error" role="alert">{historyCodeError}</p>}
+        {pairingMessage && <p className="spreadsheet-status" role="status">{pairingMessage}</p>}
+        {pairingError && <p className="spreadsheet-error" role="alert">{pairingError}</p>}
       </section>
 
       <section aria-labelledby="spreadsheet-upload-title" className="spreadsheet-panel">

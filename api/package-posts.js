@@ -22,6 +22,17 @@ function getOwnerHash(request) {
   return createHash('sha256').update(code).digest('hex')
 }
 
+async function getCanonicalOwnerHash(client, keyHash) {
+  const { data, error } = await client
+    .from('history_key_aliases')
+    .select('owner_key_hash')
+    .eq('key_hash', keyHash)
+    .maybeSingle()
+  if (error?.code === '42P01' || error?.code === 'PGRST205') return keyHash
+  if (error) throw error
+  return data?.owner_key_hash || keyHash
+}
+
 function validatePost(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return 'Post valid package results.'
@@ -71,8 +82,8 @@ export default async function handler(request, response, environment = process.e
     return response.status(405).json({ error: 'Use GET, POST, or DELETE for package history.' })
   }
 
-  const ownerHash = getOwnerHash(request)
-  if (!ownerHash) return response.status(401).json({ error: 'Enter a valid history access code.' })
+  const keyHash = getOwnerHash(request)
+  if (!keyHash) return response.status(401).json({ error: 'Enter a valid history access code.' })
 
   const client = getClient(environment)
   if (!client) {
@@ -82,6 +93,7 @@ export default async function handler(request, response, environment = process.e
   }
 
   try {
+    const ownerHash = await getCanonicalOwnerHash(client, keyHash)
     if (request.method === 'GET') {
       const { data, error } = await client
         .from('package_posts')

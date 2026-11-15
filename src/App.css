@@ -291,6 +291,67 @@
   gap: 14px;
 }
 
+.spreadsheet-pairing {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #e8e4ed;
+}
+
+.spreadsheet-pairing-heading h3 {
+  margin: 0 0 5px;
+  color: #352c3d;
+  font-size: 14px;
+}
+
+.spreadsheet-pairing-heading p,
+.spreadsheet-pairing-request p {
+  margin: 0;
+  color: #716a77;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.spreadsheet-pairing-pin {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  color: #4d148c;
+}
+
+.spreadsheet-pairing-pin strong {
+  font-size: 30px;
+  letter-spacing: 0.18em;
+}
+
+.spreadsheet-pairing-pin span {
+  color: #716a77;
+  font-size: 12px;
+}
+
+.spreadsheet-pairing-request {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #d6c6e7;
+  border-radius: 5px;
+  background: #fcfaff;
+}
+
+.spreadsheet-pairing-request strong,
+.spreadsheet-pairing-join input {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+}
+
+.spreadsheet-pairing-join {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
 .spreadsheet-auth-field {
   display: grid;
   gap: 7px;
@@ -1165,6 +1226,10 @@
 
   .spreadsheet-auth-actions {
     grid-column: auto;
+  }
+
+  .spreadsheet-pairing-join {
+    grid-template-columns: 1fr;
   }
 
   .section-heading h2 {

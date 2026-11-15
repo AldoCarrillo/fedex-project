@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv } from 'vite'
 import { validateAddressWithFedex } from './server/fedex.js'
 import { validateAddressWithSmarty } from './server/smarty.js'
+import historyPairingHandler from './api/history-pairing.js'
 import packagePostsHandler from './api/package-posts.js'
 
 function addressValidationApiPlugin(environment) {
@@ -99,6 +100,59 @@ function addressValidationApiPlugin(environment) {
             response.statusCode = 400
             response.setHeader('Content-Type', 'application/json; charset=utf-8')
             response.end(JSON.stringify({ error: 'Send package results as valid JSON.' }))
+            return
+          }
+          next(error)
+        }
+      })
+
+      server.middlewares.use('/api/history-pairing', async (request, response, next) => {
+        let body
+        try {
+          if (request.method === 'POST') {
+            let rawBody = ''
+            for await (const chunk of request) {
+              rawBody += chunk
+              if (rawBody.length > 16_384) {
+                response.statusCode = 413
+                response.setHeader('Content-Type', 'application/json; charset=utf-8')
+                response.end(JSON.stringify({ error: 'Pairing request is too large.' }))
+                return
+              }
+            }
+            body = JSON.parse(rawBody)
+          }
+
+          const query = new URL(request.url, 'http://localhost').searchParams
+          let result
+          let statusCode = 200
+          const apiResponse = {
+            setHeader() {},
+            status(code) {
+              statusCode = code
+              return this
+            },
+            json(value) {
+              result = value
+              return this
+            },
+          }
+
+          await historyPairingHandler({
+            method: request.method,
+            headers: request.headers,
+            body,
+            query: { action: query.get('action') },
+          }, apiResponse, environment)
+
+          response.statusCode = statusCode
+          response.setHeader('Content-Type', 'application/json; charset=utf-8')
+          response.end(JSON.stringify(result))
+        } catch (error) {
+          if (error instanceof SyntaxError) {
+            response.statusCode = 400
+            response.setHeader('Content-Type', 'application/json; charset=utf-8')
+            response.end(JSON.stringify({ error: 'Send pairing data as valid JSON.' }))
             return
           }
           next(error)
