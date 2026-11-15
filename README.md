@@ -1,8 +1,10 @@
 # FedEx Tools
 
-A React and Vite application with a FedEx-inspired tools home page. Tool 03 checks U.S. address format in the browser and can verify an address with Smarty; the other tool pages are placeholders.
+A React and Vite application with a FedEx-inspired tools home page. Tool 01 filters a three-column Excel workbook into eight numeric groups; Tool 03 checks U.S. address format in the browser and can verify an address with Smarty. The other tool pages are placeholders.
 
 Vercel rewrites the tool page URLs to the React app so they also work when opened directly or refreshed.
+
+The Missing Packages Filter reads `.xlsx` files locally in the browser. It locates the ID column by its header or by matching ID values, then groups three-column workbook rows by the ID's first three digits (`XXX-XXXX`) into ranges 100–199 through 800–899. When a `1st scan` column is present, rows in each group are sorted oldest-first by that timestamp; unreadable timestamps appear last. Up to 100 rows are initially shown per section, with a button to reveal more.
 
 The address checker validates required fields and ZIP code format in the browser. It offers local suggestions for common cities after a state is selected; suggestions are not exhaustive, and any city can still be entered. The **Check Smarty** and **Check FedEx** actions send the submitted address to their respective providers from server-side endpoints; credentials are not sent to the browser. Each provider's response is shown separately and does not guarantee delivery. FedEx uses the sandbox by default. Photo scanning is available after holding its button for two seconds, then tapping it to choose a photo for on-device OCR.
 
