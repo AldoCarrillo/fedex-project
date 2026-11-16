@@ -329,6 +329,15 @@ function createAllGroupsImage(groups, headers, idIndex) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${sections.join('')}</svg>`
 }
 
+function createSingleGroupImage(groupStart, rows, headers, idIndex) {
+  const width = 1200
+  const section = createGroupImage(groupStart, rows, headers, idIndex)
+  if (section.height > MAX_IMAGE_DIMENSION) {
+    throw new Error(`The ${groupStart}s section is too large for one PNG image.`)
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${section.height}" viewBox="0 0 ${width} ${section.height}">${section.markup}</svg>`
+}
+
 function renderPng(svg) {
   const svgUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }))
 
@@ -464,6 +473,7 @@ function SpreadsheetTool() {
   const [error, setError] = useState('')
   const [downloadMessage, setDownloadMessage] = useState('')
   const [downloadError, setDownloadError] = useState('')
+  const [downloadingGroup, setDownloadingGroup] = useState(null)
   const [postMessage, setPostMessage] = useState('')
   const [postError, setPostError] = useState('')
   const [historyError, setHistoryError] = useState('')
@@ -934,6 +944,31 @@ function SpreadsheetTool() {
     }
   }
 
+  async function downloadGroup(groupStart, rows) {
+    setDownloadingGroup(groupStart)
+    setDownloadMessage('')
+    setDownloadError('')
+    try {
+      const svg = createSingleGroupImage(groupStart, rows, headers, idColumnIndex)
+      const png = await renderPng(svg)
+      const url = URL.createObjectURL(png)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `missing-packages-${groupStart}s.png`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setDownloadMessage(`Downloading the ${groupStart}s section as a PNG image.`)
+    } catch (downloadError) {
+      setDownloadError(downloadError instanceof Error
+        ? downloadError.message
+        : `Could not create the ${groupStart}s PNG image. Please try again.`)
+    } finally {
+      setDownloadingGroup(null)
+    }
+  }
+
   return (
     <div className="spreadsheet-tool">
       <p className="eyebrow">EXCEL FILTER</p>
@@ -1164,7 +1199,18 @@ function SpreadsheetTool() {
                 >
                   <div className="spreadsheet-group-heading">
                     <h3 id={`spreadsheet-group-${groupStart}`}>{groupStart}s</h3>
-                    <span>{rows.length.toLocaleString()} {rows.length === 1 ? 'row' : 'rows'}</span>
+                    <div className="spreadsheet-group-actions">
+                      <span>{rows.length.toLocaleString()} {rows.length === 1 ? 'row' : 'rows'}</span>
+                      <button
+                        aria-label={`Download ${groupStart}s section as PNG`}
+                        className="spreadsheet-group-download"
+                        disabled={downloadingGroup !== null}
+                        onClick={() => downloadGroup(groupStart, rows)}
+                        type="button"
+                      >
+                        {downloadingGroup === groupStart ? 'Downloading…' : 'Download PNG'}
+                      </button>
+                    </div>
                   </div>
                   <PackageRows
                     headers={headers}
